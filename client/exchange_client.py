@@ -5,7 +5,6 @@ import random
 import time
 from threading import Thread
 from sys import argv
-from abc import ABC, abstractmethod
 import datetime
 
 
@@ -46,7 +45,7 @@ class Instrument:
     name: str
     expiry: datetime.datetime
 
-class ExchangeClient(ABC):
+class ExchangeClient():
     current_instrument: Optional[Instrument]
     
     def __init__(self, ws_url: str, id: str):
