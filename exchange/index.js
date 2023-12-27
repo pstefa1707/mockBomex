@@ -46,7 +46,7 @@ function complete_instrument() {
 
 function create_instrument() {
   var next = new Date();
-  next.setMinutes(Math.ceil(next.getMinutes() / 10) * 10);
+  next.setMinutes(Math.ceil(next.getMinutes() / 30) * 30);
   next.setSeconds(0);
 
   current_instrument.expiry = next.getTime() / 1000;
@@ -54,7 +54,7 @@ function create_instrument() {
     next.getUTCDay() + ":" + next.getUTCHours() + ":" + next.getUTCMinutes();
 
   let waitTime = next.getTime() - new Date().getTime();
-  waitTime = waitTime > 0 ? waitTime : 1000 * 60 * 5; // Ensure a minimum 30-minute wait time
+  waitTime = waitTime > 0 ? waitTime : 1000 * 60 * 30; // Ensure a minimum 30-minute wait time
   console.log("Waiting for:", waitTime, "milliseconds.");
   setTimeout(complete_instrument, waitTime);
 
