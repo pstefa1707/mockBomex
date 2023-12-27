@@ -174,7 +174,6 @@ function removeOrderFromBook(order) {
     order.direction === "SELL" ? exchange.sell_orders : exchange.buy_orders;
   if (order.price in book)
     book[order.price] = book[order.price].filter((o) => o.id !== order.id);
-  else console.log("Not in book!");
 }
 
 function checkTrades(order) {
