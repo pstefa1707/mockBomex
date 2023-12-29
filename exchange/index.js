@@ -3,6 +3,8 @@ import fetch from "node-fetch"; // Importing node-fetch
 import axios from "axios";
 import { v4 as uuid } from "uuid";
 
+const instrumentTick = 30; // 30 minutes
+
 let current_instrument = {};
 
 let pnls = {};
@@ -46,7 +48,9 @@ function complete_instrument() {
 
 function create_instrument() {
   var next = new Date();
-  next.setMinutes(Math.ceil(next.getMinutes() / 30) * 30);
+  next.setMinutes(
+    Math.ceil(next.getMinutes() / instrumentTick) * instrumentTick
+  );
   next.setSeconds(0);
 
   current_instrument.expiry = next.getTime() / 1000;
@@ -54,7 +58,7 @@ function create_instrument() {
     next.getUTCDay() + ":" + next.getUTCHours() + ":" + next.getUTCMinutes();
 
   let waitTime = next.getTime() - new Date().getTime();
-  waitTime = waitTime > 0 ? waitTime : 1000 * 60 * 30; // Ensure a minimum 30-minute wait time
+  waitTime = waitTime > 0 ? waitTime : 1000 * 60 * instrumentTick; // Ensure a minimum 30-minute wait time
   console.log("Waiting for:", waitTime, "milliseconds.");
   setTimeout(complete_instrument, waitTime);
 
@@ -112,8 +116,8 @@ function addOrderToBook(order) {
 
 function matchOrder(order, book) {
   const priceLevels = Object.keys(book);
-  if (order.direction === "BUY") priceLevels.sort((a, b) => b - a);
-  else priceLevels.sort((a, b) => a - b);
+  if (order.direction === "BUY") priceLevels.sort((a, b) => a - b);
+  else priceLevels.sort((a, b) => b - a);
 
   for (let i = 0; i < priceLevels.length; i++) {
     const price = priceLevels[i];
@@ -155,36 +159,52 @@ function executeOrder(crossOrder, order) {
   const trade = {
     seller: crossOrder.direction === "SELL" ? crossOrder.sender : order.sender,
     buyer: crossOrder.direction === "BUY" ? crossOrder.sender : order.sender,
+    buy_order_id: order.direction === "BUY" ? order.id : crossOrder.id,
+    sell_order_id: order.direction === "SELL" ? order.id : crossOrder.id,
     size: traded_vol,
     price: crossOrder.price,
     id: uuid(),
     timestamp: new Date().getTime(),
   };
   updatePositions(trade);
-  broadcastUpdate(trade, "trade");
 
   // Remove or update fully executed orders
   if (crossOrder.size === 0) {
     removeOrderFromBook(crossOrder);
   }
+
+  return trade;
 }
 
 function removeOrderFromBook(order) {
   const book =
     order.direction === "SELL" ? exchange.sell_orders : exchange.buy_orders;
-  if (order.price in book)
-    book[order.price] = book[order.price].filter((o) => o.id !== order.id);
+  if (order.price in book) {
+    const order_to_remove = book[order.price].find(
+      (o) => o.sender === order.sender && o.id === order.id
+    );
+
+    if (order_to_remove) {
+      book[order.price] = book[order.price].filter(
+        (o) => o.id !== order_to_remove.id
+      );
+      broadcastUpdate([order_to_remove], "removed_orders");
+    }
+  }
 }
 
 function checkTrades(order) {
   let book =
     order.direction === "BUY" ? exchange.sell_orders : exchange.buy_orders;
 
+  const trades = [];
+
   while (order.size > 0) {
     let crossOrder = matchOrder(order, book);
     if (!crossOrder) break; // No matching order found
 
-    executeOrder(crossOrder, order);
+    const trade = executeOrder(crossOrder, order);
+    trades.push(trade);
 
     // Remove fully executed orders
     if (order.size === 0) {
@@ -195,23 +215,44 @@ function checkTrades(order) {
   if (order.size > 0) {
     // If order wasn't fully matched, add to book
     const orderConfirmation = addOrderToBook(order);
-    return orderConfirmation;
+    return [orderConfirmation, trades];
   }
+  return [null, trades];
 }
 
 function processOrder(ws, order) {
-  const resultingOrder = checkTrades(order);
+  // Round order price to 0.1
+  order.price = Math.round(order.price * 10) / 10;
+  const [resultingOrder, trades] = checkTrades(order);
   if (resultingOrder) {
-    ws.send(JSON.stringify({ type: "order_confirmation", order }));
+    broadcastUpdate(resultingOrder, "order_confirmation");
   }
 
-  broadcastUpdate(
-    {
-      buy_orders: exchange.buy_orders,
-      sell_orders: exchange.sell_orders,
-    },
-    "orders"
-  );
+  broadcastUpdate(trades, "trades");
+}
+
+function clearOrders(ws, user_id) {
+  // Find orders we will clear
+  const orders_to_clear = [];
+  Object.entries(exchange.buy_orders).forEach(([price, orders]) => {
+    orders.forEach((o) => {
+      if (o.sender === user_id) orders_to_clear.push(o);
+    });
+  });
+  Object.entries(exchange.sell_orders).forEach(([price, orders]) => {
+    orders.forEach((o) => {
+      if (o.sender === user_id) orders_to_clear.push(o);
+    });
+  });
+
+  Object.entries(exchange.buy_orders).forEach(([price, orders]) => {
+    exchange.buy_orders[price] = orders.filter((o) => o.sender !== user_id);
+  });
+  Object.entries(exchange.sell_orders).forEach(([price, orders]) => {
+    exchange.sell_orders[price] = orders.filter((o) => o.sender !== user_id);
+  });
+
+  return orders_to_clear;
 }
 
 const HOSTNAME = "0.0.0.0";
@@ -234,19 +275,15 @@ wss.on("connection", (ws) => {
     const msg = JSON.parse(message);
     if (msg.type == "order") {
       processOrder(ws, msg.order);
+    } else if (msg.type == "clear_orders") {
+      const cleared_orders = clearOrders(ws, msg.sender);
+      broadcastUpdate(cleared_orders, "removed_orders");
     } else if (msg.type == "get_pnls") {
       ws.send(JSON.stringify({ type: "pnls", pnls }));
     } else if (msg.type == "get_trades") {
       ws.send(JSON.stringify({ type: "all_trades", trades: exchange.trades }));
     } else if (msg.type == "remove_order") {
       removeOrderFromBook(msg.order);
-      broadcastUpdate(
-        {
-          buy_orders: exchange.buy_orders,
-          sell_orders: exchange.sell_orders,
-        },
-        "orders"
-      );
     }
   });
 });

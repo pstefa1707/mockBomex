@@ -35,6 +35,8 @@ class Order:
 class Trade:
     id : str
     buyer: str
+    buy_order_id: str
+    sell_order_id: str
     seller: str
     price: float
     size: int
@@ -100,6 +102,12 @@ class ExchangeClient():
     def on_pnls(self, pnls : dict):
         pass
     
+    def on_removed_order(self, order : Order):
+        pass
+    
+    def clear_orders(self):
+        self.ws.send(json.dumps({"type": "clear_orders", "sender": self.id}))
+    
     def request_pnls(self):
         self.ws.send(json.dumps({"type": "get_pnls"}))
     
@@ -119,30 +127,22 @@ class ExchangeClient():
             self._new_instrument_handler(msg['data'])
         elif msg['type'] == 'instrument_closed':
             self.current_instrument = None
+            self.on_pnls(msg['data'])
         elif msg['type'] == 'initial_state':
             self._new_instrument_handler(msg['current_instrument'])
-        elif msg['type'] == 'trade':
-            self._trade_handler(msg['data'])
+        elif msg['type'] == 'trades':
+            for trade in msg['data']:
+                self._trade_handler(trade)
         elif msg['type'] == 'all_trades':
             self.on_all_trades(list(map(lambda x: Trade(**x), msg['trades'])))
         elif msg['type'] == 'pnls':
             self.on_pnls(msg['pnls'])
         elif msg['type'] == 'order_confirmation':
-            self.on_order_confirmation(Order(**msg['order']))
-        elif msg['type'] == 'orders':
-            # Deserialise the orders
-            sell_orders = msg['data']['sell_orders']
-            buy_orders = msg['data']['buy_orders']
-            
-            for price, orders in list(sell_orders.items()):
-                sell_orders[float(price)] = list(map(lambda x: Order(**x), orders))
-                del sell_orders[price]
-                
-            for price, orders in list(buy_orders.items()):
-                buy_orders[float(price)] = list(map(lambda x: Order(**x), orders))
-                del buy_orders[price]
-                
-            self.on_orders(sell_orders, buy_orders)
+            if msg['data']['sender'] == self.id:
+                self._order_confirmation_handler(msg['data'])
+        elif msg['type'] == 'removed_orders':
+            for order in msg['data']:
+                self.on_removed_order(Order(**order))
 
     def on_error(self, ws, error):
         print("Error:", error)

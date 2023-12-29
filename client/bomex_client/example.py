@@ -8,20 +8,24 @@ from sys import argv
 from exchange_client import ExchangeClient, Order, Trade, Direction, Instrument
 
 # Configuration for the auto-trader
-max_price = 40
-min_price = 10
+max_price = 30
+min_price = 20
 max_size = 10
 
 class RandomWalkStrategy(ExchangeClient):
     def __init__(self, *args):
         super().__init__(*args)
-        self.current_price = 20 # initial starting price for random walk
+        self.current_price = 25 # initial starting price for random walk
   
     def on_order_confirmation(self, order: Order):
         print(f"Order confirmed: {order}")
     
     def on_trade(self, trade: Trade):
         print(f"Trade: {trade}")
+        if trade.buyer == self.id:
+            self.current_price += 0.5
+        else:
+            self.current_price -= 0.5
         
     def on_pnls(self, pnls):
         print(f"PNLs: {pnls}")
@@ -34,9 +38,12 @@ class RandomWalkStrategy(ExchangeClient):
         
     def generate_order(self) -> Order:
         direction = random.choice([Direction.BUY, Direction.SELL])
+        probability = ((((self.current_price - min_price) / (max_price - min_price)) - .5) / 2) + .5
         
-        # Random walk price
-        self.current_price += random.randint(-1, 1)
+        if random.random() < probability:
+            self.current_price -= 1
+        else:
+            self.current_price += 1
         
         if self.current_price > max_price:
             self.current_price = max_price
